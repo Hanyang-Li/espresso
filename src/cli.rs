@@ -11,7 +11,6 @@ Modes:
   espresso daemon install    install the helper (sudo)
   espresso daemon uninstall  remove the helper (sudo)
   espresso daemon status     show helper and keep-awake status
-  espresso                   show this help
 
 The daemon helper adds lid-closed keep-awake: screen off, no sleep,
 even on battery. Without it, only idle-sleep is prevented.
