@@ -76,13 +76,19 @@ pub fn decode_server(line: &str) -> Result<ServerMsg, IpcError> {
         .strip_prefix("STATUS ")
         .ok_or_else(|| IpcError::Malformed(line.to_string()))?;
 
+    // The `version` field is the last field written by `encode_server` and may
+    // contain whitespace, so it must be split off verbatim rather than via
+    // `split_whitespace()`, which would truncate it at the first space.
+    let (fields, version) = rest
+        .split_once(" version=")
+        .ok_or_else(|| IpcError::Malformed(line.to_string()))?;
+
     let mut refcount = None;
     let mut sleep_disabled = None;
     let mut lid_closed = None;
     let mut pid = None;
-    let mut version = None;
 
-    for field in rest.split_whitespace() {
+    for field in fields.split_whitespace() {
         let (k, v) = field
             .split_once('=')
             .ok_or_else(|| IpcError::Malformed(field.to_string()))?;
@@ -91,8 +97,7 @@ pub fn decode_server(line: &str) -> Result<ServerMsg, IpcError> {
             "sleep_disabled" => sleep_disabled = Some(v == "1"),
             "lid_closed" => lid_closed = Some(v == "1"),
             "pid" => pid = v.parse().ok(),
-            "version" => version = Some(v.to_string()),
-            _ => {}
+            _ => return Err(IpcError::Malformed(field.to_string())),
         }
     }
 
@@ -101,7 +106,7 @@ pub fn decode_server(line: &str) -> Result<ServerMsg, IpcError> {
         sleep_disabled: sleep_disabled.ok_or_else(|| IpcError::Malformed(line.to_string()))?,
         lid_closed: lid_closed.ok_or_else(|| IpcError::Malformed(line.to_string()))?,
         pid: pid.ok_or_else(|| IpcError::Malformed(line.to_string()))?,
-        version: version.ok_or_else(|| IpcError::Malformed(line.to_string()))?,
+        version: version.to_string(),
     }))
 }
 
@@ -139,5 +144,52 @@ mod tests {
     #[test]
     fn malformed_client_rejected() {
         assert!(matches!(decode_client("NONSENSE"), Err(IpcError::Malformed(_))));
+    }
+
+    #[test]
+    fn status_missing_prefix_rejected() {
+        assert!(matches!(
+            decode_server("refcount=1 sleep_disabled=0 lid_closed=0 pid=1 version=0.1"),
+            Err(IpcError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn status_missing_field_rejected() {
+        assert!(matches!(
+            decode_server("STATUS refcount=1 sleep_disabled=0 lid_closed=0 version=0.1"),
+            Err(IpcError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn status_non_numeric_refcount_rejected() {
+        assert!(matches!(
+            decode_server("STATUS refcount=abc sleep_disabled=0 lid_closed=0 pid=1 version=0.1"),
+            Err(IpcError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn status_unknown_field_rejected() {
+        assert!(matches!(
+            decode_server(
+                "STATUS refcount=1 sleep_disabled=0 lid_closed=0 pid=1 bogus=1 version=0.1"
+            ),
+            Err(IpcError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn status_version_with_space_round_trips() {
+        let info = StatusInfo {
+            refcount: 1,
+            sleep_disabled: false,
+            lid_closed: true,
+            pid: 99,
+            version: "0.2.0 debug build".into(),
+        };
+        let line = encode_server(&ServerMsg::Status(info.clone()));
+        assert_eq!(decode_server(line.trim_end()), Ok(ServerMsg::Status(info)));
     }
 }
