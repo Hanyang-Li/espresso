@@ -1,5 +1,6 @@
 pub mod assertion;
 pub mod cli;
+pub mod daemon;
 pub mod ipc;
 pub mod lid;
 pub mod power;
