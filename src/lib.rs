@@ -7,4 +7,5 @@ pub mod lid;
 pub mod power;
 pub mod progress;
 pub mod refcount;
+pub mod session;
 pub mod time;
