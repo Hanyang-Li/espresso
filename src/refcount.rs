@@ -39,7 +39,10 @@ impl RefcountState {
     }
 
     pub fn on_hold_close(&mut self) -> Vec<Action> {
-        self.count = self.count.saturating_sub(1);
+        if self.count == 0 {
+            return vec![];
+        }
+        self.count -= 1;
         if self.count != 0 {
             return vec![];
         }
@@ -53,6 +56,7 @@ impl RefcountState {
 
     pub fn on_grace_elapsed(&mut self) -> Vec<Action> {
         if self.count == 0 && self.in_grace {
+            self.in_grace = false;
             vec![Action::Exit]
         } else {
             vec![]
@@ -118,6 +122,34 @@ mod tests {
             vec![CancelGraceTimer, SetSleepDisabled(true), StartLidWatch]
         );
         // A stale grace-elapsed after re-enable must be ignored.
+        assert_eq!(s.on_grace_elapsed(), vec![]);
+    }
+
+    #[test]
+    fn over_close_from_zero_is_noop() {
+        let mut s = RefcountState::new();
+        assert_eq!(s.on_hold_close(), vec![]);
+        assert_eq!(s.count(), 0);
+    }
+
+    #[test]
+    fn double_close_after_last_is_noop() {
+        let mut s = RefcountState::new();
+        s.on_hold_open();
+        assert_eq!(
+            s.on_hold_close(),
+            vec![SetSleepDisabled(false), StopLidWatch, StartGraceTimer]
+        );
+        assert_eq!(s.on_hold_close(), vec![]);
+        assert_eq!(s.count(), 0);
+    }
+
+    #[test]
+    fn grace_elapsed_then_reopen_is_clean() {
+        let mut s = RefcountState::new();
+        s.on_hold_open();
+        s.on_hold_close(); // enters grace
+        assert_eq!(s.on_grace_elapsed(), vec![Exit]);
         assert_eq!(s.on_grace_elapsed(), vec![]);
     }
 }
