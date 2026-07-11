@@ -14,7 +14,7 @@
 - Rust edition 2024. Bump crate version to `0.2.0`.
 - Only ONE subprocess spawn is allowed anywhere: `pmset displaysleepnow` (lid-close screen-off). Everything else is direct FFI.
 - The foreground CLI holds the assertion; the daemon owns ONLY `SleepDisabled`.
-- LaunchDaemon label: `tech.fintopia.espresso.daemon`. Plist path: `/Library/LaunchDaemons/tech.fintopia.espresso.daemon.plist`. Socket path: `/var/run/espresso.sock` (mode 0666). Idle-grace: 60s. Lid poll interval: 2s.
+- LaunchDaemon label: `local.espresso.daemon`. Plist path: `/Library/LaunchDaemons/local.espresso.daemon.plist`. Socket path: `/var/run/espresso.sock` (mode 0666). Idle-grace: 60s. Lid poll interval: 2s.
 - `SleepDisabled` semantics are last-writer-wins (documented): espresso owns it while any session is active and clears it when the last session ends.
 - The daemon coordinator must be single-threaded (all state mutation in one thread consuming an mpsc channel).
 
@@ -1408,8 +1408,8 @@ use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::Command;
 
-pub const LABEL: &str = "tech.fintopia.espresso.daemon";
-pub const PLIST_PATH: &str = "/Library/LaunchDaemons/tech.fintopia.espresso.daemon.plist";
+pub const LABEL: &str = "local.espresso.daemon";
+pub const PLIST_PATH: &str = "/Library/LaunchDaemons/local.espresso.daemon.plist";
 
 fn plist_contents(program: &str) -> String {
     format!(

@@ -9,8 +9,8 @@ use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::process::Command;
 
-pub const LABEL: &str = "tech.fintopia.espresso.daemon";
-pub const PLIST_PATH: &str = "/Library/LaunchDaemons/tech.fintopia.espresso.daemon.plist";
+pub const LABEL: &str = "local.espresso.daemon";
+pub const PLIST_PATH: &str = "/Library/LaunchDaemons/local.espresso.daemon.plist";
 
 fn plist_contents(program: &str) -> String {
     format!(

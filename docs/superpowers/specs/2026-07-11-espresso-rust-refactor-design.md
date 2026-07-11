@@ -181,8 +181,8 @@ Example (installed, with active sessions):
 
 ```
 espresso daemon status
-  Installed:        yes   /Library/LaunchDaemons/tech.fintopia.espresso.daemon.plist
-  Registered:       yes   launchd: system/tech.fintopia.espresso.daemon
+  Installed:        yes   /Library/LaunchDaemons/local.espresso.daemon.plist
+  Registered:       yes   launchd: system/local.espresso.daemon
   Running:          yes   (pid 4821, up 3m12s)
   Active sessions:  2
   SleepDisabled:    1     (espresso: 2 active sessions)
