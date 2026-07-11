@@ -1,3 +1,4 @@
+pub mod assertion;
 pub mod cli;
 pub mod ipc;
 pub mod progress;
