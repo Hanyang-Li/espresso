@@ -1,5 +1,6 @@
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDateTime, NaiveTime, TimeZone};
 use std::fmt;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseTargetError {
@@ -21,6 +22,58 @@ impl fmt::Display for ParseTargetError {
 }
 
 impl std::error::Error for ParseTargetError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimerArgError {
+    Empty,
+    NotPositive(String),
+    Unparseable(String),
+    Target(ParseTargetError),
+}
+
+impl fmt::Display for TimerArgError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "-t requires a value"),
+            Self::NotPositive(v) => write!(f, "-t countdown seconds must be greater than 0: {v}"),
+            Self::Unparseable(v) => write!(f, "-t value is not a valid number: {v}"),
+            Self::Target(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for TimerArgError {}
+
+pub fn parse_timer_arg(value: &str, now: DateTime<Local>) -> Result<Duration, TimerArgError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(TimerArgError::Empty);
+    }
+
+    if trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        let secs: u64 = trimmed
+            .parse()
+            .map_err(|_| TimerArgError::Unparseable(trimmed.to_string()))?;
+        if secs == 0 {
+            return Err(TimerArgError::NotPositive(trimmed.to_string()));
+        }
+        return Ok(Duration::from_secs(secs));
+    }
+
+    if let Ok(n) = trimmed.parse::<i64>() {
+        if n <= 0 {
+            return Err(TimerArgError::NotPositive(trimmed.to_string()));
+        }
+    }
+
+    match parse_target_time(trimmed, now) {
+        Ok(target) => {
+            let millis = target.signed_duration_since(now).num_milliseconds().max(1) as u64;
+            Ok(Duration::from_millis(millis))
+        }
+        Err(e) => Err(TimerArgError::Target(e)),
+    }
+}
 
 pub fn parse_target_time(
     input: &str,
@@ -82,5 +135,47 @@ fn resolve_local_time(
             }
         }
         LocalResult::None => Err(ParseTargetError::InvalidLocalTime(input.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod timer_arg_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use std::time::Duration;
+
+    fn now() -> DateTime<Local> {
+        Local.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).single().unwrap()
+    }
+
+    #[test]
+    fn positive_integer_is_countdown_seconds() {
+        assert_eq!(parse_timer_arg("3600", now()), Ok(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn zero_is_rejected() {
+        assert_eq!(parse_timer_arg("0", now()), Err(TimerArgError::NotPositive("0".into())));
+    }
+
+    #[test]
+    fn negative_is_rejected() {
+        assert_eq!(parse_timer_arg("-5", now()), Err(TimerArgError::NotPositive("-5".into())));
+    }
+
+    #[test]
+    fn empty_is_rejected() {
+        assert_eq!(parse_timer_arg("   ", now()), Err(TimerArgError::Empty));
+    }
+
+    #[test]
+    fn clock_time_is_target() {
+        // 13:00 is one hour after the fixed now of 12:00.
+        assert_eq!(parse_timer_arg("13:00", now()), Ok(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn junk_is_unsupported_format() {
+        assert!(matches!(parse_timer_arg("abc", now()), Err(TimerArgError::Target(_))));
     }
 }
