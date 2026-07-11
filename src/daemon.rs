@@ -147,7 +147,13 @@ fn handle_connection(mut conn: UnixStream, tx: Sender<Event>) {
 fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
     let mut state = RefcountState::new();
     let mut grace_gen: u64 = 0;
-    let lid_stop = Arc::new(AtomicBool::new(false));
+    // The currently-active lid-watch's stop flag, if a watcher thread is
+    // running. Each StartLidWatch gets a *fresh* flag rather than reusing
+    // a shared one, so a Stop that races a subsequent Start can never be
+    // "undone" by the new Start resetting the same flag back to false —
+    // that would strand the old watcher thread forever. Only this
+    // (single) coordinator thread reads or writes `lid_stop`.
+    let mut lid_stop: Option<Arc<AtomicBool>> = None;
 
     while let Ok(event) = rx.recv() {
         let actions = match event {
@@ -183,11 +189,21 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
                     }
                 }
                 Action::StartLidWatch => {
-                    lid_stop.store(false, Ordering::SeqCst);
-                    spawn_lid_watch(lid_stop.clone());
+                    // Signal any previous watcher to stop, but never reuse
+                    // its flag: give this watch its own, so a later Start
+                    // can't accidentally revive a thread that a prior Stop
+                    // already told to exit.
+                    if let Some(old) = lid_stop.take() {
+                        old.store(true, Ordering::SeqCst);
+                    }
+                    let flag = Arc::new(AtomicBool::new(false));
+                    lid_stop = Some(flag.clone());
+                    spawn_lid_watch(flag);
                 }
                 Action::StopLidWatch => {
-                    lid_stop.store(true, Ordering::SeqCst);
+                    if let Some(flag) = lid_stop.take() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
                 }
                 Action::StartGraceTimer => {
                     grace_gen += 1;
