@@ -6,14 +6,15 @@ use std::time::Duration;
 
 const AFTER_HELP: &str = "\
 Modes:
-  espresso -t <seconds|time>     Keep awake for a countdown (e.g. 1800) or until a
-                                 target time (e.g. 17:00, 2026-07-11 17:00); shows a progress bar
-  espresso <command> [args...]   Keep awake while the command runs, then exit with its status
-  espresso daemon install        Install the privileged helper (sudo) — enables lid-closed
-                                 keep-awake: screen off but no sleep, even on battery
-  espresso daemon uninstall      Remove the privileged helper (sudo)
-  espresso daemon status         Show helper and keep-awake status
-  espresso                       Show this help
+  espresso -t <secs|time>    countdown, or run until a clock time
+  espresso <command> ...     keep awake while the command runs
+  espresso daemon install    install the helper (sudo)
+  espresso daemon uninstall  remove the helper (sudo)
+  espresso daemon status     show helper and keep-awake status
+  espresso                   show this help
+
+The daemon helper adds lid-closed keep-awake: screen off, no sleep,
+even on battery. Without it, only idle-sleep is prevented.
 
 Examples:
   espresso -t 1800
@@ -29,11 +30,11 @@ Examples:
     after_help = AFTER_HELP,
 )]
 pub struct Cli {
-    /// Countdown seconds (>0) or a target time (HH:mm, yyyy-MM-dd HH:mm, ...).
+    /// Countdown seconds, or a target time (e.g. 1800, 17:00).
     #[arg(short = 't', long = "time")]
     pub time: Option<String>,
 
-    /// A `daemon <sub>` management command, or the command to run while active.
+    /// A daemon subcommand, or the command to run while active.
     #[arg(allow_hyphen_values = true)]
     pub rest: Vec<String>,
 }

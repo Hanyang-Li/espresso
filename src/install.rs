@@ -94,11 +94,11 @@ pub fn uninstall() -> Result<()> {
     Ok(())
 }
 
-/// Renders `espresso daemon status`. Two layers:
-///   1. Install/registration facts — plist presence and `launchctl print`
-///      — which never connect to the daemon and so never affect it.
-///   2. A live `Query` connection (never a `Hold`, so it does not itself
-///      keep the Mac awake or bump the refcount).
+/// Renders `espresso daemon status` without ever socket-activating the daemon.
+/// Install/registration/running facts come from the plist file and
+/// `launchctl print` (neither touches the socket). Only if launchd reports a
+/// live instance do we open a `Query` connection — which reaches the existing
+/// daemon (never spawns a new one) and never bumps the refcount.
 pub fn print_status() -> Result<()> {
     if !is_installed() {
         println!("espresso daemon status");
@@ -107,48 +107,111 @@ pub fn print_status() -> Result<()> {
         return Ok(());
     }
 
-    let registered = Command::new("launchctl")
-        .args(["print", &format!("system/{LABEL}")])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let state = launchd_state();
+    let socket = if std::path::Path::new(SOCKET_PATH).exists() {
+        "present"
+    } else {
+        "absent"
+    };
 
     println!("espresso daemon status");
     println!("  Installed:        yes   {PLIST_PATH}");
     println!(
         "  Registered:       {}   launchd: system/{LABEL}",
-        if registered { "yes" } else { "no" }
+        if state.registered { "yes" } else { "no" }
     );
 
-    match query_status()? {
-        Some(info) => {
-            println!("  Running:          yes   (pid {})", info.pid);
-            println!("  Active sessions:  {}", info.refcount);
-            if info.sleep_disabled && info.refcount > 0 {
+    if state.running {
+        let pid = state
+            .pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        println!("  Running:          yes   (pid {pid})");
+        match query_status()? {
+            Some(info) => {
+                println!("  Active sessions:  {}", info.refcount);
+                if info.sleep_disabled && info.refcount > 0 {
+                    println!(
+                        "  SleepDisabled:    1     (espresso: {} active sessions)",
+                        info.refcount
+                    );
+                } else {
+                    report_flag_without_daemon()?;
+                }
                 println!(
-                    "  SleepDisabled:    1     (espresso: {} active sessions)",
-                    info.refcount
+                    "  Lid:              {}",
+                    if info.lid_closed { "closed" } else { "open" }
                 );
-            } else {
-                report_flag_without_daemon()?;
+                println!(
+                    "  Version:          daemon {} / cli {}",
+                    info.version,
+                    env!("CARGO_PKG_VERSION")
+                );
             }
-            println!(
-                "  Lid:              {}",
-                if info.lid_closed { "closed" } else { "open" }
-            );
-            println!("  Socket:           {SOCKET_PATH} (present)");
-            println!(
-                "  Version:          daemon {} / cli {}",
-                info.version,
-                env!("CARGO_PKG_VERSION")
-            );
+            None => report_flag_without_daemon()?,
         }
-        None => {
-            println!("  Running:          no (idle, starts on demand)");
-            report_flag_without_daemon()?;
-        }
+    } else {
+        // Not running: do NOT connect the socket — that would socket-activate a
+        // fresh instance and make "idle" impossible to observe. With no daemon
+        // up there can be no active Hold, so sessions are 0.
+        println!("  Running:          no    (idle — starts on demand)");
+        println!("  Active sessions:  0");
+        report_flag_without_daemon()?;
+        println!(
+            "  Lid:              {}",
+            if crate::lid::lid_closed().unwrap_or(false) {
+                "closed"
+            } else {
+                "open"
+            }
+        );
     }
+    println!("  Socket:           {SOCKET_PATH} ({socket})");
     Ok(())
+}
+
+struct LaunchdState {
+    registered: bool,
+    running: bool,
+    pid: Option<u32>,
+}
+
+/// Reads `launchctl print system/<LABEL>`, which queries launchd's job registry
+/// and does NOT open the socket — so it never socket-activates the daemon.
+/// `registered` = the job is loaded; `running` = an instance is currently up
+/// (from a `state = running` line or a parsed `pid`); `pid` when available.
+fn launchd_state() -> LaunchdState {
+    match Command::new("launchctl")
+        .args(["print", &format!("system/{LABEL}")])
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let mut running = false;
+            let mut pid = None;
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(v) = line.strip_prefix("pid = ") {
+                    if let Ok(n) = v.trim().parse::<u32>() {
+                        pid = Some(n);
+                        running = true;
+                    }
+                } else if line == "state = running" {
+                    running = true;
+                }
+            }
+            LaunchdState {
+                registered: true,
+                running,
+                pid,
+            }
+        }
+        _ => LaunchdState {
+            registered: false,
+            running: false,
+            pid: None,
+        },
+    }
 }
 
 /// The `SleepDisabled` line to use when there is no running daemon holding

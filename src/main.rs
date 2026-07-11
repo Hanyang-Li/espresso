@@ -43,9 +43,11 @@ fn run() -> Result<i32> {
             Ok(0)
         }
         Ok(Mode::Help) => {
-            Cli::command().print_help()?;
-            println!();
-            Ok(0)
+            // No args given: show help but signal misuse. (`--help` is handled
+            // by clap itself → stdout, exit 0.)
+            eprint!("{}", Cli::command().render_help());
+            eprintln!();
+            Ok(1)
         }
         Err(e) => {
             eprintln!("error: {e}");
