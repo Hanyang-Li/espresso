@@ -1,19 +1,16 @@
-use crate::time::{parse_timer_arg, TimerArgError};
+use crate::time::{TimerArgError, parse_timer_arg};
 use chrono::{DateTime, Local};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::fmt;
 use std::time::Duration;
 
 const AFTER_HELP: &str = "\
-Modes:
-  espresso -t <secs|time>    countdown, or run until a clock time
+Modes without a subcommand:
+  espresso -t <secs|time>    keep awake for a countdown or clock time
   espresso <command> ...     keep awake while the command runs
-  espresso daemon install    install the helper (sudo)
-  espresso daemon uninstall  remove the helper (sudo)
-  espresso daemon status     show helper and keep-awake status
 
-The daemon helper adds lid-closed keep-awake: screen off, no sleep,
-even on battery. Without it, only idle-sleep is prevented.
+The 'daemon' subcommand adds lid-closed keep-awake (screen off, no sleep,
+even on battery). Without it, only idle-sleep is prevented.
 
 Examples:
   espresso -t 1800
@@ -22,20 +19,41 @@ Examples:
 
 /// espresso — keep this Mac awake; closing the lid only turns off the screen.
 #[derive(Parser, Debug)]
-#[command(
-    name = "espresso",
-    version,
-    trailing_var_arg = true,
-    after_help = AFTER_HELP,
-)]
+#[command(name = "espresso", version, after_help = AFTER_HELP)]
 pub struct Cli {
     /// Countdown seconds, or a target time (e.g. 1800, 17:00).
     #[arg(short = 't', long = "time")]
     pub time: Option<String>,
 
-    /// A daemon subcommand, or the command to run while active.
-    #[arg(allow_hyphen_values = true)]
-    pub rest: Vec<String>,
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Manage the lid-closed keep-awake helper (install/uninstall/status).
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
+    /// launchd runtime entry point (internal).
+    #[command(name = "__daemon", hide = true)]
+    Runtime,
+
+    /// A command to run while keeping the Mac awake.
+    #[command(external_subcommand)]
+    Run(Vec<String>),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DaemonAction {
+    /// Install the privileged helper (requires sudo).
+    Install,
+    /// Remove the privileged helper (requires sudo).
+    Uninstall,
+    /// Show helper and keep-awake status.
+    Status,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -51,16 +69,12 @@ pub enum Mode {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliError {
-    UnknownDaemonSub(String),
     Timer(TimerArgError),
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownDaemonSub(s) => {
-                write!(f, "unknown daemon subcommand: '{s}' (expected install|uninstall|status)")
-            }
             Self::Timer(e) => write!(f, "{e}"),
         }
     }
@@ -69,27 +83,20 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 pub fn resolve_mode(cli: Cli, now: DateTime<Local>) -> Result<Mode, CliError> {
-    if let Some(first) = cli.rest.first() {
-        if first == "__daemon" {
-            return Ok(Mode::DaemonRuntime);
-        }
-        if first == "daemon" {
-            return match cli.rest.get(1).map(String::as_str) {
-                Some("install") => Ok(Mode::DaemonInstall),
-                Some("uninstall") => Ok(Mode::DaemonUninstall),
-                Some("status") => Ok(Mode::DaemonStatus),
-                Some(other) => Err(CliError::UnknownDaemonSub(other.to_string())),
-                None => Err(CliError::UnknownDaemonSub(String::new())),
-            };
-        }
-        // Positional command present: -t is ignored, no error.
-        return Ok(Mode::Command(cli.rest));
-    }
-
-    match cli.time {
-        Some(v) => parse_timer_arg(&v, now).map(Mode::Timer).map_err(CliError::Timer),
-        // No -t and no positional command: show help (not an error).
-        None => Ok(Mode::Help),
+    match cli.command {
+        // A positional command is present: -t is ignored (no error).
+        Some(Commands::Run(argv)) => Ok(Mode::Command(argv)),
+        Some(Commands::Daemon { action }) => Ok(match action {
+            DaemonAction::Install => Mode::DaemonInstall,
+            DaemonAction::Uninstall => Mode::DaemonUninstall,
+            DaemonAction::Status => Mode::DaemonStatus,
+        }),
+        Some(Commands::Runtime) => Ok(Mode::DaemonRuntime),
+        None => match cli.time {
+            Some(v) => parse_timer_arg(&v, now).map(Mode::Timer).map_err(CliError::Timer),
+            // No -t and no command: show help (main treats this as misuse: exit 1).
+            None => Ok(Mode::Help),
+        },
     }
 }
 
@@ -116,7 +123,10 @@ mod tests {
 
     #[test]
     fn t_seconds_is_timer() {
-        assert_eq!(resolve_mode(cli(&["-t", "60"]), now()), Ok(Mode::Timer(Duration::from_secs(60))));
+        assert_eq!(
+            resolve_mode(cli(&["-t", "60"]), now()),
+            Ok(Mode::Timer(Duration::from_secs(60)))
+        );
     }
 
     #[test]
@@ -141,11 +151,22 @@ mod tests {
     }
 
     #[test]
-    fn daemon_unknown_subcommand_errors() {
-        assert!(matches!(
-            resolve_mode(cli(&["daemon", "frobnicate"]), now()),
-            Err(CliError::UnknownDaemonSub(_))
-        ));
+    fn daemon_install_and_uninstall_subcommands() {
+        assert_eq!(resolve_mode(cli(&["daemon", "install"]), now()), Ok(Mode::DaemonInstall));
+        assert_eq!(
+            resolve_mode(cli(&["daemon", "uninstall"]), now()),
+            Ok(Mode::DaemonUninstall)
+        );
+    }
+
+    #[test]
+    fn daemon_unknown_subcommand_is_rejected_by_clap() {
+        assert!(<Cli as clap::Parser>::try_parse_from(["espresso", "daemon", "frobnicate"]).is_err());
+    }
+
+    #[test]
+    fn daemon_without_action_is_rejected_by_clap() {
+        assert!(<Cli as clap::Parser>::try_parse_from(["espresso", "daemon"]).is_err());
     }
 
     #[test]
