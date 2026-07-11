@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Local;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use espresso::cli::{Cli, Mode, resolve_mode};
 use espresso::{daemon, install, session};
 
@@ -40,6 +40,11 @@ fn run() -> Result<i32> {
         }
         Ok(Mode::DaemonRuntime) => {
             daemon::run()?;
+            Ok(0)
+        }
+        Ok(Mode::Help) => {
+            Cli::command().print_help()?;
+            println!();
             Ok(0)
         }
         Err(e) => {

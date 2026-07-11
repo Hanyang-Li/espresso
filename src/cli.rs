@@ -4,9 +4,30 @@ use clap::Parser;
 use std::fmt;
 use std::time::Duration;
 
+const AFTER_HELP: &str = "\
+Modes:
+  espresso -t <seconds|time>     Keep awake for a countdown (e.g. 1800) or until a
+                                 target time (e.g. 17:00, 2026-07-11 17:00); shows a progress bar
+  espresso <command> [args...]   Keep awake while the command runs, then exit with its status
+  espresso daemon install        Install the privileged helper (sudo) — enables lid-closed
+                                 keep-awake: screen off but no sleep, even on battery
+  espresso daemon uninstall      Remove the privileged helper (sudo)
+  espresso daemon status         Show helper and keep-awake status
+  espresso                       Show this help
+
+Examples:
+  espresso -t 1800
+  espresso -t 17:00
+  espresso -- npm run build";
+
 /// espresso — keep this Mac awake; closing the lid only turns off the screen.
 #[derive(Parser, Debug)]
-#[command(name = "espresso", version, trailing_var_arg = true)]
+#[command(
+    name = "espresso",
+    version,
+    trailing_var_arg = true,
+    after_help = AFTER_HELP,
+)]
 pub struct Cli {
     /// Countdown seconds (>0) or a target time (HH:mm, yyyy-MM-dd HH:mm, ...).
     #[arg(short = 't', long = "time")]
@@ -25,11 +46,11 @@ pub enum Mode {
     DaemonUninstall,
     DaemonStatus,
     DaemonRuntime,
+    Help,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliError {
-    NoArgs,
     UnknownDaemonSub(String),
     Timer(TimerArgError),
 }
@@ -37,10 +58,6 @@ pub enum CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoArgs => write!(
-                f,
-                "usage: espresso -t <seconds|time> | espresso <command...> | espresso daemon <install|uninstall|status>"
-            ),
             Self::UnknownDaemonSub(s) => {
                 write!(f, "unknown daemon subcommand: '{s}' (expected install|uninstall|status)")
             }
@@ -71,7 +88,8 @@ pub fn resolve_mode(cli: Cli, now: DateTime<Local>) -> Result<Mode, CliError> {
 
     match cli.time {
         Some(v) => parse_timer_arg(&v, now).map(Mode::Timer).map_err(CliError::Timer),
-        None => Err(CliError::NoArgs),
+        // No -t and no positional command: show help (not an error).
+        None => Ok(Mode::Help),
     }
 }
 
@@ -92,8 +110,8 @@ mod tests {
     }
 
     #[test]
-    fn no_args_is_error() {
-        assert!(matches!(resolve_mode(cli(&[]), now()), Err(CliError::NoArgs)));
+    fn no_args_shows_help() {
+        assert_eq!(resolve_mode(cli(&[]), now()), Ok(Mode::Help));
     }
 
     #[test]
