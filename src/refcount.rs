@@ -23,6 +23,18 @@ impl RefcountState {
         self.count
     }
 
+    /// Arms the idle-exit clock for a freshly-started daemon that begins at
+    /// refcount 0 (e.g. socket-activated by a `Query` connection or
+    /// relaunched by launchd after a crash, without ever receiving a
+    /// `Hold`). Only meaningful when called immediately after `new()`, i.e.
+    /// at count 0: it puts the state into the same "in grace" condition
+    /// `on_hold_close` reaches when the last hold releases, so the daemon
+    /// still self-exits after the grace period if no `Hold` ever arrives.
+    pub fn begin_idle(&mut self) -> Vec<Action> {
+        self.in_grace = true;
+        vec![Action::StartGraceTimer]
+    }
+
     pub fn on_hold_open(&mut self) -> Vec<Action> {
         self.count += 1;
         if self.count != 1 {
@@ -150,6 +162,26 @@ mod tests {
         s.on_hold_open();
         s.on_hold_close(); // enters grace
         assert_eq!(s.on_grace_elapsed(), vec![Exit]);
+        assert_eq!(s.on_grace_elapsed(), vec![]);
+    }
+
+    #[test]
+    fn begin_idle_then_grace_exits() {
+        let mut s = RefcountState::new();
+        assert_eq!(s.begin_idle(), vec![StartGraceTimer]);
+        assert_eq!(s.count(), 0);
+        assert_eq!(s.on_grace_elapsed(), vec![Exit]);
+    }
+
+    #[test]
+    fn begin_idle_then_hold_cancels() {
+        let mut s = RefcountState::new();
+        s.begin_idle();
+        assert_eq!(
+            s.on_hold_open(),
+            vec![CancelGraceTimer, SetSleepDisabled(true), StartLidWatch]
+        );
+        // A stale grace-elapsed from the startup timer must be ignored.
         assert_eq!(s.on_grace_elapsed(), vec![]);
     }
 }

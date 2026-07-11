@@ -155,6 +155,20 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
     // (single) coordinator thread reads or writes `lid_stop`.
     let mut lid_stop: Option<Arc<AtomicBool>> = None;
 
+    // Arm the idle-exit clock immediately: a daemon that starts at refcount
+    // 0 (socket-activated by a `Query`, or relaunched by launchd after a
+    // crash) and never receives a `Hold` must still self-exit after the
+    // grace period, exactly as if a hold had opened and closed. If a `Hold`
+    // does arrive, `on_hold_open`'s `CancelGraceTimer` action bumps
+    // `grace_gen` and this timer's eventual `GraceElapsed` is recognized as
+    // stale and ignored.
+    for action in state.begin_idle() {
+        match action {
+            Action::StartGraceTimer => grace_gen = start_grace_timer(&tx, grace_gen),
+            other => unreachable!("begin_idle() returned unexpected action: {other:?}"),
+        }
+    }
+
     while let Ok(event) = rx.recv() {
         let actions = match event {
             Event::HoldOpened => state.on_hold_open(),
@@ -206,13 +220,7 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
                     }
                 }
                 Action::StartGraceTimer => {
-                    grace_gen += 1;
-                    let generation = grace_gen;
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        thread::sleep(GRACE);
-                        let _ = tx.send(Event::GraceElapsed(generation));
-                    });
+                    grace_gen = start_grace_timer(&tx, grace_gen);
                 }
                 Action::CancelGraceTimer => {
                     // Bump the generation so any in-flight timer's
@@ -226,6 +234,21 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
             }
         }
     }
+}
+
+/// Bumps the grace generation and spawns a thread that sleeps for `GRACE`
+/// before sending `Event::GraceElapsed` tagged with the new generation.
+/// Returns the new generation so callers can update their local `grace_gen`.
+/// Shared by the coordinator's startup idle-arm and its `StartGraceTimer`
+/// action handler so the timer-spawn logic exists in exactly one place.
+fn start_grace_timer(tx: &Sender<Event>, grace_gen: u64) -> u64 {
+    let generation = grace_gen + 1;
+    let tx = tx.clone();
+    thread::spawn(move || {
+        thread::sleep(GRACE);
+        let _ = tx.send(Event::GraceElapsed(generation));
+    });
+    generation
 }
 
 fn spawn_lid_watch(stop: Arc<AtomicBool>) {
