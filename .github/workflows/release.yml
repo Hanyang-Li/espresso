@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --locked --target aarch64-apple-darwin
+
+      - name: Package
+        run: |
+          ASSET=espresso-aarch64-apple-darwin.tar.gz
+          tar -czf "$ASSET" -C target/aarch64-apple-darwin/release espresso
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            espresso-aarch64-apple-darwin.tar.gz
+            espresso-aarch64-apple-darwin.tar.gz.sha256

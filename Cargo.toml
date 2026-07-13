@@ -1,7 +1,11 @@
 [package]
 name = "espresso"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
+description = "Keep your Mac awake from the command line; closing the lid only turns off the screen."
+license = "MIT"
+repository = "https://github.com/Hanyang-Li/espresso"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"
