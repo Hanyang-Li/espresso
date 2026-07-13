@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh
 
 ```sh
 # 锁定某个版本
-ESPRESSO_VERSION=v0.2.1 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+ESPRESSO_VERSION=v0.2.2 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 
 # 安装到自定义目录
 ESPRESSO_INSTALL_DIR="$HOME/.local/bin" sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"

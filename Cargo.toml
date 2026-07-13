@@ -1,6 +1,6 @@
 [package]
 name = "espresso"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Keep your Mac awake from the command line; closing the lid only turns off the screen."
 license = "MIT"
