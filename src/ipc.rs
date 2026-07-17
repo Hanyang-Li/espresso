@@ -71,7 +71,7 @@ pub fn encode_server(m: &ServerMsg) -> String {
                 "STATUS pid={} sessions={} version={}\n",
                 s.pid,
                 s.sessions.len(),
-                s.version,
+                sanitize_line(&s.version),
             );
             for sess in &s.sessions {
                 out.push_str(&format!(
@@ -218,6 +218,14 @@ mod tests {
     fn status_missing_prefix_rejected() {
         assert!(matches!(
             decode_server("pid=1 sessions=0 version=0.1"),
+            Err(IpcError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn status_missing_field_rejected() {
+        assert!(matches!(
+            decode_server("STATUS sessions=0 version=0.1"),
             Err(IpcError::Malformed(_))
         ));
     }

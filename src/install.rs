@@ -131,13 +131,18 @@ pub fn print_status() -> Result<()> {
             ui::yesno(sleep_disabled, use_color),
         ]),
         {
+            let running_yesno = ui::yesno(state.running, use_color);
+            let running_width = running_yesno.width();
             let mut parts = vec![
                 Cell::plain(format!("{:<status_label$}", "Running")),
                 Cell::plain("   "),
-                ui::yesno(state.running, use_color),
+                running_yesno,
             ];
             if let Some(pid) = state.pid.filter(|_| state.running) {
-                parts.push(Cell::plain(format!("   pid {pid}")));
+                let suffix_full = format!("   pid {pid}");
+                let prefix_w = status_label + 3 + running_width;
+                let budget = max_inner.saturating_sub(prefix_w);
+                parts.push(Cell::plain(ui::truncate(&suffix_full, budget)));
             }
             ui::join(&parts)
         },
@@ -155,10 +160,13 @@ pub fn print_status() -> Result<()> {
 
     // ---- Infos box lines ----
     let infos_label = 10; // width("Registered")
-    let version_value = match &info {
+    let version_value_full = match &info {
         Some(i) => format!("daemon {} / cli {}", i.version, cli_version),
         None => format!("cli {cli_version}"),
     };
+    let version_prefix_w = infos_label + 3; // label padded + "   "
+    let version_value =
+        ui::truncate(&version_value_full, max_inner.saturating_sub(version_prefix_w));
     let mut infos_specs: Vec<Cell> = vec![ui::join(&[
         Cell::plain(format!("{:<infos_label$}", "Version")),
         Cell::plain("   "),
@@ -243,17 +251,22 @@ fn info_row(
     use_color: bool,
     max_inner: usize,
 ) -> Cell {
+    let flag_cell = ui::yesno(flag, use_color);
+    let flag_width = flag_cell.width();
     let mut parts = vec![
         Cell::plain(format!("{label:<label_col$}")),
         Cell::plain("   "),
-        ui::yesno(flag, use_color),
+        flag_cell,
     ];
     if let Some(v) = value {
-        // yesno is "yes"(3)/"no"(2); pad so the value column starts evenly.
-        let gap = if flag { "   " } else { "    " };
-        let prefix_w = label_col + 3 + if flag { 3 } else { 2 } + gap.len();
+        // Pad so the value column starts at a consistent position: a fixed
+        // 3-space gap after the token, plus one extra space for every column
+        // the token is short of "yes" (derived from the actual cell width,
+        // not a hardcoded 3/2 literal).
+        let gap_len = 3 + ui::display_width("yes").saturating_sub(flag_width);
+        let prefix_w = label_col + 3 + flag_width + gap_len;
         let budget = max_inner.saturating_sub(prefix_w);
-        parts.push(Cell::plain(gap));
+        parts.push(Cell::plain(" ".repeat(gap_len)));
         parts.push(Cell::plain(ui::truncate(&v, budget)));
     }
     ui::join(&parts)
