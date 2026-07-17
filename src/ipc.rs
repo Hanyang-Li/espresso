@@ -22,9 +22,12 @@ pub struct StatusInfo {
     pub version: String,
 }
 
-/// Replace line-breaking bytes so a value stays on its own IPC line.
+/// Replace control characters (newlines, ESC, tabs, other C0/C1) with spaces
+/// so a value stays on its own IPC line and can't inject terminal escapes
+/// when later rendered. Applied to every IPC-sourced string that reaches a
+/// terminal (command, version) at the encode boundary.
 fn sanitize_line(s: &str) -> String {
-    s.replace(['\n', '\r'], " ")
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +236,24 @@ mod tests {
         };
         let line = encode_server(&ServerMsg::Status(info.clone()));
         assert_eq!(decode_server(&line), Ok(ServerMsg::Status(info)));
+    }
+
+    #[test]
+    fn encode_server_strips_control_chars() {
+        let info = StatusInfo {
+            sessions: vec![SessionInfo {
+                pid: 1,
+                command: "a\u{1b}[2Jb\tc".into(), // ESC + CSI + TAB
+                uptime_secs: 0,
+            }],
+            pid: 2,
+            version: "v\u{1b}x".into(),
+        };
+        let line = encode_server(&ServerMsg::Status(info));
+        assert!(!line.contains('\u{1b}'), "ESC leaked: {line:?}");
+        assert!(!line.contains('\t'), "TAB leaked: {line:?}");
+        // Still parseable after sanitization.
+        assert!(matches!(decode_server(&line), Ok(ServerMsg::Status(_))));
     }
 
     #[test]
