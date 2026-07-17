@@ -45,7 +45,7 @@ Optional overrides:
 
 ```sh
 # pin a specific version
-ESPRESSO_VERSION=v0.2.2 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+ESPRESSO_VERSION=v0.2.3 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 
 # install to a custom directory
 ESPRESSO_INSTALL_DIR="$HOME/.local/bin" sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
