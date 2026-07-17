@@ -26,6 +26,19 @@ use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+/// The invocation as the user typed it, argv[0] normalized to `espresso`
+/// (e.g. "espresso -- sleep 100", "espresso -t 1800"). Newlines stripped so
+/// it stays on one IPC line.
+fn current_command() -> String {
+    let rest: Vec<String> = std::env::args().skip(1).collect();
+    let joined = if rest.is_empty() {
+        "espresso".to_string()
+    } else {
+        format!("espresso {}", rest.join(" "))
+    };
+    joined.replace(['\n', '\r'], " ")
+}
+
 /// Acquire the idle-sleep assertion and, if possible, a daemon hold connection.
 /// Returns the assertion (always) and the hold stream (None if degraded).
 fn start_keepawake() -> Result<(SleepAssertion, Option<UnixStream>)> {
@@ -34,7 +47,7 @@ fn start_keepawake() -> Result<(SleepAssertion, Option<UnixStream>)> {
 
     let installed = ensure_installed_interactive().unwrap_or(false);
     let hold = if installed {
-        match hold_connection() {
+        match hold_connection(&current_command()) {
             Ok(stream) => Some(stream),
             Err(e) => {
                 eprintln!("espresso: could not reach daemon ({e}); lid-close will still sleep");

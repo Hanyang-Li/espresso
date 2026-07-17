@@ -9,34 +9,41 @@
 //! the invariant that keeps refcount mutation race-free without locks.
 
 use crate::ipc::{
-    ClientMsg, SOCKET_PATH, ServerMsg, StatusInfo, decode_client, decode_server, encode_client,
-    encode_server,
+    ClientMsg, SOCKET_PATH, ServerMsg, SessionInfo, StatusInfo, decode_client, decode_server,
+    encode_client, encode_server,
 };
 use crate::lid::lid_closed;
 use crate::power::set_sleep_disabled;
 use crate::refcount::{Action, RefcountState};
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::FromRawFd;
 use std::os::raw::c_char;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const GRACE: Duration = Duration::from_secs(60);
 const LID_POLL: Duration = Duration::from_secs(2);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Monotonic per-connection session id. Assigned in each connection handler
+/// so a later `HoldClosed(id)` can remove exactly the session it opened.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 // ---------- client helpers ----------
 
-/// Connects to the daemon and sends `HOLD`. Holding the returned stream open
-/// keeps the hold alive; dropping it (closing the connection) releases it.
-pub fn hold_connection() -> std::io::Result<UnixStream> {
+/// Connects to the daemon and sends `HOLD` with this process's pid and the
+/// reconstructed command line. Holding the returned stream open keeps the
+/// hold alive; dropping it releases it.
+pub fn hold_connection(command: &str) -> std::io::Result<UnixStream> {
     let mut stream = UnixStream::connect(SOCKET_PATH)?;
-    stream.write_all(encode_client(&ClientMsg::Hold).as_bytes())?;
+    let msg = ClientMsg::Hold { pid: std::process::id(), command: command.to_string() };
+    stream.write_all(encode_client(&msg).as_bytes())?;
     stream.flush()?;
     Ok(stream)
 }
@@ -65,10 +72,25 @@ pub fn query_status() -> std::io::Result<Option<StatusInfo>> {
 /// Events fed into the single coordinator thread. Worker threads only ever
 /// send these; only `coordinator` receives and acts on them.
 enum Event {
-    HoldOpened,
-    HoldClosed,
+    HoldOpened(SessionMeta),
+    HoldClosed(u64),
     GraceElapsed(u64),
     Query(Sender<StatusInfo>),
+}
+
+/// Metadata carried from a connection handler into the coordinator when a
+/// hold opens.
+struct SessionMeta {
+    id: u64,
+    pid: u32,
+    command: String,
+}
+
+/// A live hold as tracked by the coordinator (started clock is daemon-side).
+struct ActiveSession {
+    pid: u32,
+    command: String,
+    started: Instant,
 }
 
 /// The `espresso __daemon` entry point.
@@ -112,8 +134,9 @@ fn handle_connection(mut conn: UnixStream, tx: Sender<Event>) {
         return;
     }
     match decode_client(&line) {
-        Ok(ClientMsg::Hold) => {
-            if tx.send(Event::HoldOpened).is_err() {
+        Ok(ClientMsg::Hold { pid, command }) => {
+            let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+            if tx.send(Event::HoldOpened(SessionMeta { id, pid, command })).is_err() {
                 return;
             }
             let _ = conn.write_all(encode_server(&ServerMsg::Ok).as_bytes());
@@ -127,7 +150,7 @@ fn handle_connection(mut conn: UnixStream, tx: Sender<Event>) {
                     Ok(_) => {}
                 }
             }
-            let _ = tx.send(Event::HoldClosed);
+            let _ = tx.send(Event::HoldClosed(id));
         }
         Ok(ClientMsg::Query) => {
             let (rtx, rrx) = mpsc::channel::<StatusInfo>();
@@ -147,6 +170,7 @@ fn handle_connection(mut conn: UnixStream, tx: Sender<Event>) {
 /// in this module communicate with it exclusively via `Event`s on `rx`.
 fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
     let mut state = RefcountState::new();
+    let mut sessions: HashMap<u64, ActiveSession> = HashMap::new();
     let mut grace_gen: u64 = 0;
     // The currently-active lid-watch's stop flag, if a watcher thread is
     // running. Each StartLidWatch gets a *fresh* flag rather than reusing
@@ -172,8 +196,19 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
 
     while let Ok(event) = rx.recv() {
         let actions = match event {
-            Event::HoldOpened => state.on_hold_open(),
-            Event::HoldClosed => state.on_hold_close(),
+            Event::HoldOpened(meta) => {
+                let actions = state.on_hold_open();
+                sessions.insert(
+                    meta.id,
+                    ActiveSession { pid: meta.pid, command: meta.command, started: Instant::now() },
+                );
+                actions
+            }
+            Event::HoldClosed(id) => {
+                let actions = state.on_hold_close();
+                sessions.remove(&id);
+                actions
+            }
             Event::GraceElapsed(generation) => {
                 if generation == grace_gen {
                     state.on_grace_elapsed()
@@ -184,12 +219,7 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
                 }
             }
             Event::Query(reply) => {
-                let info = StatusInfo {
-                    sessions: Vec::new(),
-                    pid: std::process::id(),
-                    version: VERSION.to_string(),
-                };
-                let _ = reply.send(info);
+                let _ = reply.send(build_status(&sessions));
                 vec![]
             }
         };
@@ -299,4 +329,43 @@ fn obtain_listener() -> Result<UnixListener> {
     let mode = std::os::unix::fs::PermissionsExt::from_mode(0o666);
     std::fs::set_permissions(SOCKET_PATH, mode).ok();
     Ok(listener)
+}
+
+/// Sort a session list for display: longest-running first.
+pub(crate) fn sort_sessions(list: &mut Vec<SessionInfo>) {
+    list.sort_by(|a, b| b.uptime_secs.cmp(&a.uptime_secs));
+}
+
+/// Snapshot the live session table into a `StatusInfo` for a QUERY reply.
+fn build_status(sessions: &HashMap<u64, ActiveSession>) -> StatusInfo {
+    let mut list: Vec<SessionInfo> = sessions
+        .values()
+        .map(|s| SessionInfo {
+            pid: s.pid,
+            command: s.command.clone(),
+            uptime_secs: s.started.elapsed().as_secs(),
+        })
+        .collect();
+    sort_sessions(&mut list);
+    StatusInfo { sessions: list, pid: std::process::id(), version: VERSION.to_string() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_sessions;
+    use crate::ipc::SessionInfo;
+
+    #[test]
+    fn sort_sessions_longest_uptime_first() {
+        let mut list = vec![
+            SessionInfo { pid: 1, command: "a".into(), uptime_secs: 45 },
+            SessionInfo { pid: 2, command: "b".into(), uptime_secs: 192 },
+            SessionInfo { pid: 3, command: "c".into(), uptime_secs: 100 },
+        ];
+        sort_sessions(&mut list);
+        assert_eq!(
+            list.iter().map(|s| s.pid).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+    }
 }

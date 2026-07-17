@@ -4,7 +4,7 @@ pub const SOCKET_PATH: &str = "/var/run/espresso.sock";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMsg {
-    Hold,
+    Hold { pid: u32, command: String },
     Query,
 }
 
@@ -50,17 +50,34 @@ impl std::error::Error for IpcError {}
 
 pub fn encode_client(m: &ClientMsg) -> String {
     match m {
-        ClientMsg::Hold => "HOLD\n".to_string(),
+        ClientMsg::Hold { pid, command } => {
+            format!("HOLD pid={pid} cmd={}\n", sanitize_line(command))
+        }
         ClientMsg::Query => "QUERY\n".to_string(),
     }
 }
 
 pub fn decode_client(line: &str) -> Result<ClientMsg, IpcError> {
-    match line.trim() {
-        "HOLD" => Ok(ClientMsg::Hold),
-        "QUERY" => Ok(ClientMsg::Query),
-        other => Err(IpcError::Malformed(other.to_string())),
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line == "QUERY" {
+        return Ok(ClientMsg::Query);
     }
+    if line == "HOLD" {
+        // Bare HOLD from an older client: no metadata available.
+        return Ok(ClientMsg::Hold { pid: 0, command: String::new() });
+    }
+    if let Some(rest) = line.strip_prefix("HOLD ") {
+        let (pid_part, cmd) = rest
+            .split_once(" cmd=")
+            .ok_or_else(|| IpcError::Malformed(line.to_string()))?;
+        let pid = pid_part
+            .strip_prefix("pid=")
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| IpcError::Malformed(line.to_string()))?;
+        return Ok(ClientMsg::Hold { pid, command: cmd.to_string() });
+    }
+    Err(IpcError::Malformed(line.to_string()))
 }
 
 pub fn encode_server(m: &ServerMsg) -> String {
@@ -163,10 +180,22 @@ mod tests {
 
     #[test]
     fn client_round_trip() {
-        for m in [ClientMsg::Hold, ClientMsg::Query] {
+        for m in [
+            ClientMsg::Hold { pid: 4821, command: "espresso -- sleep 100".into() },
+            ClientMsg::Hold { pid: 7, command: "espresso -- echo 你好 世界".into() },
+            ClientMsg::Query,
+        ] {
             let line = encode_client(&m);
-            assert_eq!(decode_client(line.trim_end()), Ok(m));
+            assert_eq!(decode_client(&line), Ok(m));
         }
+    }
+
+    #[test]
+    fn bare_hold_still_decodes() {
+        assert_eq!(
+            decode_client("HOLD"),
+            Ok(ClientMsg::Hold { pid: 0, command: String::new() })
+        );
     }
 
     #[test]
@@ -178,6 +207,7 @@ mod tests {
     #[test]
     fn malformed_client_rejected() {
         assert!(matches!(decode_client("NONSENSE"), Err(IpcError::Malformed(_))));
+        assert!(matches!(decode_client("HOLD cmd=x"), Err(IpcError::Malformed(_))));
     }
 
     #[test]
