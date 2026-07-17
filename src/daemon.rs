@@ -41,8 +41,10 @@ pub fn hold_connection() -> std::io::Result<UnixStream> {
     Ok(stream)
 }
 
-/// Connects to the daemon, sends `QUERY`, and parses the reply.
-/// Returns `Ok(None)` if the socket is absent or unreachable.
+/// Connects to the daemon, sends `QUERY`, and parses the reply. The daemon
+/// closes the Query connection after replying, so we read to EOF and decode
+/// the whole (possibly multi-line) block. Returns `Ok(None)` if the socket is
+/// absent or the reply is unparseable.
 pub fn query_status() -> std::io::Result<Option<StatusInfo>> {
     let mut stream = match UnixStream::connect(SOCKET_PATH) {
         Ok(s) => s,
@@ -50,10 +52,9 @@ pub fn query_status() -> std::io::Result<Option<StatusInfo>> {
     };
     stream.write_all(encode_client(&ClientMsg::Query).as_bytes())?;
     stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    match decode_server(&line) {
+    let mut buf = String::new();
+    BufReader::new(stream).read_to_string(&mut buf)?;
+    match decode_server(&buf) {
         Ok(ServerMsg::Status(info)) => Ok(Some(info)),
         _ => Ok(None),
     }
@@ -184,9 +185,7 @@ fn coordinator(rx: Receiver<Event>, tx: Sender<Event>) {
             }
             Event::Query(reply) => {
                 let info = StatusInfo {
-                    refcount: state.count(),
-                    sleep_disabled: state.count() > 0,
-                    lid_closed: lid_closed().unwrap_or(false),
+                    sessions: Vec::new(),
                     pid: std::process::id(),
                     version: VERSION.to_string(),
                 };
