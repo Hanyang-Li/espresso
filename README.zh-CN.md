@@ -34,7 +34,7 @@
 curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh | sh
 ```
 
-该命令会下载最新版本、校验其 checksum,并把二进制安装到 `/usr/local/bin/espresso`。
+该命令会下载最新版本、校验其 checksum,并把二进制安装到 `~/.local/bin/espresso`(无需 sudo)。若该目录尚未在 `PATH` 上,安装脚本会自动把它写入你的 shell rc。
 
 可选覆盖项:
 
@@ -42,8 +42,11 @@ curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh
 # 锁定某个版本
 ESPRESSO_VERSION=v0.2.3 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 
-# 安装到自定义目录
-ESPRESSO_INSTALL_DIR="$HOME/.local/bin" sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+# 安装到自定义目录(不可写目录如 /usr/local/bin 会回退到 sudo)
+ESPRESSO_INSTALL_DIR=/usr/local/bin sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+
+# 不修改 shell rc,只打印手动 PATH 说明
+ESPRESSO_NO_MODIFY_PATH=1 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 ```
 
 > 二进制通过 `curl` 下载,macOS 不会对它做隔离(quarantine)——没有 Gatekeeper
@@ -138,7 +141,7 @@ cargo install --path .
 
 ```sh
 sudo espresso daemon uninstall   # 如果装过辅助进程
-sudo rm /usr/local/bin/espresso
+rm ~/.local/bin/espresso
 ```
 
 ## 许可证

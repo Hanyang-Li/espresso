@@ -39,7 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh
 ```
 
 This downloads the latest release, verifies its checksum, and installs the
-binary to `/usr/local/bin/espresso`.
+binary to `~/.local/bin/espresso` (no sudo). If that directory isn't already on
+your `PATH`, the installer appends it to your shell rc.
 
 Optional overrides:
 
@@ -47,8 +48,11 @@ Optional overrides:
 # pin a specific version
 ESPRESSO_VERSION=v0.2.3 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 
-# install to a custom directory
-ESPRESSO_INSTALL_DIR="$HOME/.local/bin" sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+# install to a custom directory (a non-writable dir like /usr/local/bin uses sudo)
+ESPRESSO_INSTALL_DIR=/usr/local/bin sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
+
+# don't touch my shell rc; just print the manual PATH instructions
+ESPRESSO_NO_MODIFY_PATH=1 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Hanyang-Li/espresso/main/install.sh)"
 ```
 
 > The binary is downloaded via `curl`, so macOS does not quarantine it — no
@@ -149,7 +153,7 @@ Run the tests with `cargo test`.
 
 ```sh
 sudo espresso daemon uninstall   # if you installed the helper
-sudo rm /usr/local/bin/espresso
+rm ~/.local/bin/espresso
 ```
 
 ## License

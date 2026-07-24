@@ -66,3 +66,25 @@ LaunchDaemon plist 会记录二进制绝对路径,不能装在会变动的位置
 - Intel / universal 二进制。
 - Homebrew tap、代码签名/公证、自动更新。
 - Windows / Linux 支持。
+
+## 变更记录 (2026-07-24, v1.0.0)
+
+默认安装位置由 `/usr/local/bin` 改为 **`~/.local/bin`**,并让安装期**默认不再获取
+sudo**。理由:espresso 是面向个人用户的工具,装进用户自己的 `~/.local/bin` 更契合其
+定位,也免去每次安装都要输密码。借鉴同作者 `agent-limit` 项目的 `install.sh`。
+
+本次变更**取代**上文 §产物.1 第 5 步与"选 `/usr/local/bin` 的原因"一段,具体为:
+
+- **默认目录**:`INSTALL_DIR` 默认 `$HOME/.local/bin`(仍可用 `ESPRESSO_INSTALL_DIR` 覆盖)。
+- **sudo**:先无权限 `mkdir -p` 并检测可写性;`~/.local/bin` 在 `$HOME` 下恒可写,
+  故默认零 sudo。**仅当**被覆盖到不可写目录(如 `/usr/local/bin`)时才回退 `sudo`。
+- **PATH 处理**(借鉴 `agent-limit`):安装后若目标目录不在 `PATH` 上,按当前 shell 幂等
+  写入 rc(zsh→`.zshrc`、bash→`.bash_profile`、fish→`config.fish`,以
+  `# added by espresso installer` marker 防重复);未知 shell 或写入失败则打印手动说明。
+  新增 `ESPRESSO_NO_MODIFY_PATH=1` 可跳过改 rc、只打印手动 PATH 说明。
+- **不变**:LaunchDaemon plist 路径(`/Library/LaunchDaemons/local.espresso.daemon.plist`)、
+  socket(`/var/run/espresso.sock`)、资产命名、强制 checksum 校验、以及 `daemon install`
+  仍需 sudo(写系统级 plist)。同目录原子 `rename` 安装逻辑保留(避免替换运行中二进制的 `ETXTBSY`)。
+
+> 注:原选 `/usr/local/bin` 的理由是"路径稳定,plist 记录二进制绝对路径"。`~/.local/bin`
+> 同样是稳定绝对路径,该顾虑不受影响。
