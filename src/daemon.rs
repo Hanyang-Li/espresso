@@ -282,7 +282,9 @@ fn start_grace_timer(tx: &Sender<Event>, grace_gen: u64) -> u64 {
 
 fn spawn_lid_watch(stop: Arc<AtomicBool>) {
     thread::spawn(move || {
-        let mut was_closed = false;
+        // Start from the current lid state, so a watch that begins while the
+        // lid is already closed (e.g. a renewed hold) does not blank the screen.
+        let mut was_closed = lid_closed().unwrap_or(false);
         while !stop.load(Ordering::SeqCst) {
             let closed = lid_closed().unwrap_or(false);
             if closed && !was_closed {
